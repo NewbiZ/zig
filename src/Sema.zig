@@ -192,6 +192,7 @@ const Compilation = @import("Compilation.zig");
 const InternPool = @import("InternPool.zig");
 const Alignment = InternPool.Alignment;
 const ComptimeAllocIndex = InternPool.ComptimeAllocIndex;
+const Severity = Zir.Inst.CompileErrors.Severity;
 
 pub const default_branch_quota = 1000;
 pub const default_reference_trace_len = 2;
@@ -6084,7 +6085,7 @@ fn zirCImport(sema: *Sema, parent_block: *Block, inst: Zir.Inst.Index) CompileEr
     const result = mod.importPkg(c_import_mod) catch |err|
         return sema.fail(&child_block, src, "C import failed: {s}", .{@errorName(err)});
 
-    mod.astGenFile(result.file) catch |err|
+    mod.astGenFile(result.file, Severity.none) catch |err|
         return sema.fail(&child_block, src, "C import failed: {s}", .{@errorName(err)});
 
     try mod.ensureFileAnalyzed(result.file);

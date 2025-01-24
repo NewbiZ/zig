@@ -77,6 +77,7 @@ pub fn extraData(code: Zir, comptime T: type, index: usize) ExtraData(T) {
             Inst.Ref,
             Inst.Index,
             Inst.Declaration.Name,
+            Inst.CompileErrors.Severity,
             NullTerminatedString,
             => @enumFromInt(code.extra[i]),
 
@@ -119,7 +120,23 @@ pub fn bodySlice(zir: Zir, start: usize, len: usize) []Inst.Index {
 }
 
 pub fn hasCompileErrors(code: Zir) bool {
-    return code.extra[@intFromEnum(ExtraIndex.compile_errors)] != 0;
+    return hasCompileErrorsAboveSeverity(code, Inst.CompileErrors.Severity.none);
+}
+
+pub fn hasCompileErrorsAboveSeverity(code: Zir, severity_threshold: Inst.CompileErrors.Severity) bool {
+    const payload_index = code.extra[@intFromEnum(ExtraIndex.compile_errors)];
+    if (payload_index != 0) {
+        const header = code.extraData(Zir.Inst.CompileErrors, payload_index);
+        const items_len = header.data.items_len;
+        var extra_index = header.end;
+        for (0..items_len) |_| {
+            const item = code.extraData(Zir.Inst.CompileErrors.Item, extra_index);
+            if (@intFromEnum(item.data.severity) > @intFromEnum(severity_threshold))
+                return true;
+            extra_index = item.end;
+        }
+    }
+    return false;
 }
 
 pub fn deinit(code: *Zir, gpa: Allocator) void {
@@ -3433,9 +3450,26 @@ pub const Inst = struct {
     pub const CompileErrors = struct {
         items_len: u32,
 
+        pub const Severity = enum(u8) {
+            /// Lowest severity possible, everything should be more severe than this.
+            none = 0,
+            /// Purely cosmetic issues that do not impact code generation.
+            cosmetic = 10,
+            /// Code that has no side effect will be generated and potentially bloat
+            /// code generation and unnecessaruly pressure instruction cache
+            deadcode = 50,
+            /// Non optimal code will be generated, such as unnecessary branches or
+            /// var-declared constants that will create spurious loads.
+            performance = 100,
+            /// Highest severity issues that prevent code generation.
+            fatal = std.math.maxInt(u8),
+        };
+
         /// Trailing: `note_payload_index: u32` for each `notes_len`.
         /// It's a payload index of another `Item`.
         pub const Item = struct {
+            // Error severity, the higher the more severe.
+            severity: Severity,
             /// null terminated string index
             msg: NullTerminatedString,
             node: Ast.Node.Index,

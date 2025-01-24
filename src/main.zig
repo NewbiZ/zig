@@ -30,6 +30,7 @@ const Module = @import("Module.zig");
 const AstGen = std.zig.AstGen;
 const mingw = @import("mingw.zig");
 const Server = std.zig.Server;
+const Severity = std.zig.Zir.Inst.CompileErrors.Severity;
 
 pub const std_options = .{
     .wasiCwd = wasi_cwd,
@@ -834,6 +835,7 @@ fn buildOutputType(
     var verbose_cimport = false;
     var verbose_llvm_cpu_features = false;
     var time_report = false;
+    var user_warning_threshold = Severity.none;
     var stack_report = false;
     var show_builtin = false;
     var emit_bin: EmitBin = .yes_default_path;
@@ -1362,6 +1364,11 @@ fn buildOutputType(
                         test_no_exec = true;
                     } else if (mem.eql(u8, arg, "-ftime-report")) {
                         time_report = true;
+                    } else if (mem.eql(u8, arg, "--warning-threshold")) {
+                        const next_arg = args_iter.nextOrFatal();
+                        user_warning_threshold = std.meta.stringToEnum(Severity, next_arg) orelse {
+                            fatal("expected [none|performance|deadcode|cosmetic] after --warning-threshold, found '{s}'", .{next_arg});
+                        };
                     } else if (mem.eql(u8, arg, "-fstack-report")) {
                         stack_report = true;
                     } else if (mem.eql(u8, arg, "-fPIC")) {
@@ -3333,6 +3340,7 @@ fn buildOutputType(
         // than to any particular module. This feature can greatly reduce CLI
         // noise when --search-prefix and --mod are combined.
         .global_cc_argv = try cc_argv.toOwnedSlice(arena),
+        .warning_threshold = user_warning_threshold,
     }) catch |err| switch (err) {
         error.LibCUnavailable => {
             const triple_name = try target.zigTriple(arena);
@@ -4407,8 +4415,10 @@ fn updateModule(comp: *Compilation, color: Color, prog_node: std.Progress.Node) 
     defer errors.deinit(comp.gpa);
 
     if (errors.errorMessageCount() > 0) {
-        errors.renderToStdErr(color.renderOptions());
-        return error.SemanticAnalyzeFail;
+        errors.renderToStdErrWithWarningThreshold(color.renderOptions(), comp.warning_threshold);
+        if (errors.errorMessageCountWithWarningThreshold(comp.warning_threshold) > 0) {
+            return error.SemanticAnalyzeFail;
+        }
     }
 }
 
@@ -4651,6 +4661,8 @@ const usage_build =
     \\  --prominent-compile-errors    Buffer compile errors and display at end
     \\  --seed [integer]              For shuffling dependency traversal order (default: random)
     \\  --fetch                       Exit after fetching dependency tree
+    \\  --warning-threshold=[none|performance|deadcode|cosmetic]
+    \\                                Set the threshold from which errors are treated as warnings
     \\  -h, --help                    Print this help and exit
     \\
 ;
@@ -4677,6 +4689,7 @@ fn cmdBuild(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     var verbose_llvm_cpu_features = false;
     var fetch_only = false;
     var system_pkg_dir_path: ?[]const u8 = null;
+    var user_warning_threshold = Severity.none;
 
     const argv_index_exe = child_argv.items.len;
     _ = try child_argv.addOne();
@@ -4782,6 +4795,15 @@ fn cmdBuild(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
                     } else {
                         warn("Zig was compiled without debug extensions. --debug-compile-errors has no effect.", .{});
                     }
+                } else if (mem.eql(u8, arg, "--warning-threshold")) {
+                    if (i + 1 >= args.len) {
+                        fatal("expected [none|performance|deadcode|cosmetic] after --warning-threshold", .{});
+                    }
+                    i += 1;
+                    const next_arg = args[i];
+                    user_warning_threshold = std.meta.stringToEnum(Severity, next_arg) orelse {
+                        fatal("expected [none|performance|deadcode|cosmetic] after --warning-threshold, found '{s}'", .{next_arg});
+                    };
                 } else if (mem.eql(u8, arg, "--verbose-link")) {
                     verbose_link = true;
                 } else if (mem.eql(u8, arg, "--verbose-cc")) {
@@ -5159,6 +5181,7 @@ fn cmdBuild(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
                 .cache_mode = .whole,
                 .reference_trace = reference_trace,
                 .debug_compile_errors = debug_compile_errors,
+                .warning_threshold = user_warning_threshold,
             }) catch |err| {
                 fatal("unable to create compilation: {s}", .{@errorName(err)});
             };
@@ -5409,6 +5432,7 @@ fn jitCmd(
             .self_exe_path = self_exe_path,
             .thread_pool = &thread_pool,
             .cache_mode = .whole,
+            .warning_threshold = Severity.none,
         }) catch |err| {
             fatal("unable to create compilation: {s}", .{@errorName(err)});
         };
@@ -5910,7 +5934,8 @@ const usage_ast_check =
     \\  -h, --help            Print this help and exit
     \\  --color [auto|off|on] Enable or disable colored error messages
     \\  -t                    (debug option) Output ZIR in text form to stdout
-    \\
+    \\  --warning-threshold=[none|performance|deadcode|cosmetic]
+    \\                        Set the threshold from which errors are treated as warnings
     \\
 ;
 
@@ -5924,6 +5949,7 @@ fn cmdAstCheck(
     var color: Color = .auto;
     var want_output_text = false;
     var zig_source_file: ?[]const u8 = null;
+    var user_warning_threshold: Severity = .none;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -5942,6 +5968,15 @@ fn cmdAstCheck(
                 const next_arg = args[i];
                 color = std.meta.stringToEnum(Color, next_arg) orelse {
                     fatal("expected [auto|on|off] after --color, found '{s}'", .{next_arg});
+                };
+            } else if (mem.eql(u8, arg, "--warning-threshold")) {
+                if (i + 1 >= args.len) {
+                    fatal("expected [none|performance|deadcode|cosmetic] after --warning-threshold", .{});
+                }
+                i += 1;
+                const next_arg = args[i];
+                user_warning_threshold = std.meta.stringToEnum(Severity, next_arg) orelse {
+                    fatal("expected [none|performance|deadcode|cosmetic] after --warning-threshold, found '{s}'", .{next_arg});
                 };
             } else {
                 fatal("unrecognized parameter: '{s}'", .{arg});
@@ -6022,8 +6057,9 @@ fn cmdAstCheck(
         try Compilation.addZirErrorMessages(&wip_errors, &file);
         var error_bundle = try wip_errors.toOwnedBundle("");
         defer error_bundle.deinit(gpa);
-        error_bundle.renderToStdErr(color.renderOptions());
-        process.exit(1);
+        error_bundle.renderToStdErrWithWarningThreshold(color.renderOptions(), user_warning_threshold);
+        if (file.zir.hasCompileErrorsAboveSeverity(user_warning_threshold))
+            process.exit(1);
     }
 
     if (!want_output_text) {

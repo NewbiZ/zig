@@ -16,6 +16,7 @@ const EnvMap = std.process.EnvMap;
 const File = fs.File;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Build = @This();
+const Severity = std.zig.Zir.Inst.CompileErrors.Severity;
 
 pub const Cache = @import("Build/Cache.zig");
 pub const Step = @import("Build/Step.zig");
@@ -640,6 +641,7 @@ pub const ExecutableOptions = struct {
     /// If you want the executable to run on the same computer as the one
     /// building the package, pass the `host` field of the package's `Build`
     /// instance.
+    warning_threshold: Severity = Severity.none,
     target: ResolvedTarget,
     root_source_file: ?LazyPath = null,
     version: ?std.SemanticVersion = null,
@@ -691,6 +693,7 @@ pub fn addExecutable(b: *Build, options: ExecutableOptions) *Step.Compile {
         .use_lld = options.use_lld,
         .zig_lib_dir = options.zig_lib_dir orelse b.zig_lib_dir,
         .win32_manifest = options.win32_manifest,
+        .warning_threshold = options.warning_threshold,
     });
 }
 

@@ -38,6 +38,7 @@ const InternPool = @import("InternPool.zig");
 const Alignment = InternPool.Alignment;
 const BuiltinFn = std.zig.BuiltinFn;
 const LlvmObject = @import("codegen/llvm.zig").Object;
+const Severity = std.zig.Zir.Inst.CompileErrors.Severity;
 
 comptime {
     @setEvalBranchQuota(4000);
@@ -2098,7 +2099,7 @@ comptime {
     }
 }
 
-pub fn astGenFile(mod: *Module, file: *File) !void {
+pub fn astGenFile(mod: *Module, file: *File, warning_threshold: Severity) !void {
     assert(!file.mod.isBuiltin());
 
     const tracy = trace(@src());
@@ -2233,7 +2234,7 @@ pub fn astGenFile(mod: *Module, file: *File) !void {
             log.debug("AstGen cached success: {s}", .{file.sub_file_path});
 
             // TODO don't report compile errors until Sema @importFile
-            if (file.zir.hasCompileErrors()) {
+            if (file.zir.hasCompileErrorsAboveSeverity(warning_threshold)) {
                 {
                     comp.mutex.lock();
                     defer comp.mutex.unlock();
@@ -2363,7 +2364,7 @@ pub fn astGenFile(mod: *Module, file: *File) !void {
         });
     };
 
-    if (file.zir.hasCompileErrors()) {
+    if (file.zir.hasCompileErrorsAboveSeverity(warning_threshold)) {
         {
             comp.mutex.lock();
             defer comp.mutex.unlock();

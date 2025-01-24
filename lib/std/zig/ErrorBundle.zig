@@ -7,6 +7,8 @@
 //! empty, it means there are no errors. This special encoding exists so that
 //! heap allocation is not needed in the common case of no errors.
 
+const Severity = std.zig.Zir.Inst.CompileErrors.Severity;
+
 string_bytes: []const u8,
 /// The first thing in this array is an `ErrorMessageList`.
 extra: []const u32,
@@ -64,6 +66,13 @@ pub const ErrorMessage = struct {
     count: u32 = 1,
     src_loc: SourceLocationIndex = .none,
     notes_len: u32 = 0,
+    severity: Severity = Severity.fatal,
+};
+
+const ErrorMessageKind = enum {
+    @"error",
+    note,
+    warning,
 };
 
 pub const ReferenceTrace = struct {
@@ -86,6 +95,17 @@ pub fn deinit(eb: *ErrorBundle, gpa: Allocator) void {
 pub fn errorMessageCount(eb: ErrorBundle) u32 {
     if (eb.extra.len == 0) return 0;
     return eb.getErrorMessageList().len;
+}
+
+pub fn errorMessageCountWithWarningThreshold(eb: ErrorBundle, warning_threshold: Severity) u32 {
+    if (eb.extra.len == 0) return 0;
+    var error_count: u32 = 0;
+    for (eb.getMessages()) |msg_index| {
+        const msg = eb.getErrorMessage(msg_index);
+        if (@intFromEnum(msg.severity) > @intFromEnum(warning_threshold))
+            error_count += 1;
+    }
+    return error_count;
 }
 
 pub fn getErrorMessageList(eb: ErrorBundle) ErrorMessageList {
@@ -127,6 +147,7 @@ fn extraData(eb: ErrorBundle, comptime T: type, index: usize) struct { data: T, 
             u32 => eb.extra[i],
             MessageIndex => @as(MessageIndex, @enumFromInt(eb.extra[i])),
             SourceLocationIndex => @as(SourceLocationIndex, @enumFromInt(eb.extra[i])),
+            Severity => @as(Severity, @enumFromInt(eb.extra[i])),
             else => @compileError("bad field type"),
         };
         i += 1;
@@ -155,16 +176,24 @@ pub const RenderOptions = struct {
 };
 
 pub fn renderToStdErr(eb: ErrorBundle, options: RenderOptions) void {
+    return eb.renderToStdErrWithWarningThreshold(options, Severity.none);
+}
+
+pub fn renderToStdErrWithWarningThreshold(eb: ErrorBundle, options: RenderOptions, warning_threshold: Severity) void {
     std.debug.lockStdErr();
     defer std.debug.unlockStdErr();
     const stderr = std.io.getStdErr();
-    return renderToWriter(eb, options, stderr.writer()) catch return;
+    return eb.renderToWriterWithWarningThreshold(options, stderr.writer(), warning_threshold) catch return;
 }
 
 pub fn renderToWriter(eb: ErrorBundle, options: RenderOptions, writer: anytype) anyerror!void {
+    return eb.renderToWriterWithWarningThreshold(options, writer, Severity.none);
+}
+
+pub fn renderToWriterWithWarningThreshold(eb: ErrorBundle, options: RenderOptions, writer: anytype, warning_threshold: Severity) anyerror!void {
     if (eb.extra.len == 0) return;
     for (eb.getMessages()) |err_msg| {
-        try renderErrorMessageToWriter(eb, options, err_msg, writer, "error", .red, 0);
+        try eb.renderErrorMessageToWriter(options, err_msg, writer, ErrorMessageKind.@"error", 0, warning_threshold);
     }
 
     if (options.include_log_text) {
@@ -181,14 +210,24 @@ fn renderErrorMessageToWriter(
     options: RenderOptions,
     err_msg_index: MessageIndex,
     stderr: anytype,
-    kind: []const u8,
-    color: std.io.tty.Color,
+    kind: ErrorMessageKind,
     indent: usize,
+    warning_threshold: Severity,
 ) anyerror!void {
     const ttyconf = options.ttyconf;
     var counting_writer = std.io.countingWriter(stderr);
     const counting_stderr = counting_writer.writer();
     const err_msg = eb.getErrorMessage(err_msg_index);
+    // Adjust error to warning if below the threshold
+    const adjusted_kind = if (kind == ErrorMessageKind.@"error" and @intFromEnum(err_msg.severity) <= @intFromEnum(warning_threshold))
+        ErrorMessageKind.warning
+    else
+        kind;
+    const color = @as(std.io.tty.Color, switch (adjusted_kind) {
+        ErrorMessageKind.note => .cyan,
+        ErrorMessageKind.warning => .yellow,
+        ErrorMessageKind.@"error" => .red,
+    });
     if (err_msg.src_loc != .none) {
         const src = eb.extraData(SourceLocation, @intFromEnum(err_msg.src_loc));
         try counting_stderr.writeByteNTimes(' ', indent);
@@ -199,7 +238,9 @@ fn renderErrorMessageToWriter(
             src.data.column + 1,
         });
         try ttyconf.setColor(stderr, color);
-        try counting_stderr.writeAll(kind);
+        try counting_stderr.writeAll(@tagName(adjusted_kind));
+        if (adjusted_kind == ErrorMessageKind.warning)
+            try counting_stderr.print(" ({s})", .{@tagName(err_msg.severity)});
         try counting_stderr.writeAll(": ");
         // This is the length of the part before the error message:
         // e.g. "file.zig:4:5: error: "
@@ -235,7 +276,7 @@ fn renderErrorMessageToWriter(
             try ttyconf.setColor(stderr, .reset);
         }
         for (eb.getNotes(err_msg_index)) |note| {
-            try renderErrorMessageToWriter(eb, options, note, stderr, "note", .cyan, indent);
+            try eb.renderErrorMessageToWriter(options, note, stderr, ErrorMessageKind.note, indent, Severity.none);
         }
         if (src.data.reference_trace_len > 0 and options.include_reference_trace) {
             try ttyconf.setColor(stderr, .reset);
@@ -271,7 +312,7 @@ fn renderErrorMessageToWriter(
     } else {
         try ttyconf.setColor(stderr, color);
         try stderr.writeByteNTimes(' ', indent);
-        try stderr.writeAll(kind);
+        try stderr.writeAll(@tagName(adjusted_kind));
         try stderr.writeAll(": ");
         try ttyconf.setColor(stderr, .reset);
         const msg = eb.nullTerminatedString(err_msg.msg);
@@ -284,7 +325,7 @@ fn renderErrorMessageToWriter(
         }
         try ttyconf.setColor(stderr, .reset);
         for (eb.getNotes(err_msg_index)) |note| {
-            try renderErrorMessageToWriter(eb, options, note, stderr, "note", .cyan, indent + 4);
+            try eb.renderErrorMessageToWriter(options, note, stderr, ErrorMessageKind.note, indent + 4, Severity.none);
         }
     }
 }
@@ -503,6 +544,7 @@ pub const Wip = struct {
                         .source_line = try eb.addString(err_loc.source_line),
                     }),
                     .notes_len = item.data.notesLen(zir),
+                    .severity = item.data.severity,
                 });
             }
 
@@ -637,6 +679,7 @@ pub const Wip = struct {
                 u32 => @field(extra, field.name),
                 MessageIndex => @intFromEnum(@field(extra, field.name)),
                 SourceLocationIndex => @intFromEnum(@field(extra, field.name)),
+                Severity => @intFromEnum(@field(extra, field.name)),
                 else => @compileError("bad field type"),
             };
             i += 1;

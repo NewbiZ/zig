@@ -42,6 +42,8 @@ test_results: TestResults,
 /// to print along with debugging messages.
 debug_stack_trace: []usize,
 
+warning_threshold: std.zig.Zir.Inst.CompileErrors.Severity = .none,
+
 pub const TestResults = struct {
     fail_count: u32 = 0,
     skip_count: u32 = 0,
@@ -138,6 +140,7 @@ pub const StepOptions = struct {
     makeFn: MakeFn = makeNoOp,
     first_ret_addr: ?usize = null,
     max_rss: usize = 0,
+    warning_threshold: std.zig.Zir.Inst.CompileErrors.Severity = std.zig.Zir.Inst.CompileErrors.Severity.none,
 };
 
 pub fn init(options: StepOptions) Step {
@@ -170,6 +173,7 @@ pub fn init(options: StepOptions) Step {
         .result_duration_ns = null,
         .result_peak_rss = 0,
         .test_results = .{},
+        .warning_threshold = options.warning_threshold,
     };
 }
 
