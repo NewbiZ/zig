@@ -1052,7 +1052,7 @@ fn printErrorMessages(b: *std.Build, failing_step: *Step, run: *const Run) !void
     }
 
     if (!run.prominent_compile_errors and failing_step.result_error_bundle.errorMessageCount() > 0)
-        try failing_step.result_error_bundle.renderToWriter(renderOptions(ttyconf), stderr.writer());
+        try failing_step.result_error_bundle.renderToWriterWithWarningThreshold(renderOptions(ttyconf), stderr.writer(), failing_step.warning_threshold);
 
     for (failing_step.result_error_msgs.items) |msg| {
         try ttyconf.setColor(stderr, .red);

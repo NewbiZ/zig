@@ -40,7 +40,7 @@ project(zig
 set(ZIG_VERSION_MAJOR 0)
 set(ZIG_VERSION_MINOR 13)
 set(ZIG_VERSION_PATCH 0)
-set(ZIG_VERSION "" CACHE STRING "Override Zig version string. Default is to find out with git.")
+set(ZIG_VERSION "0.13.0-with-warning-threshold" CACHE STRING "Override Zig version string. Default is to find out with git.")
 
 if("${ZIG_VERSION}" STREQUAL "")
     set(RESOLVED_ZIG_VERSION "${ZIG_VERSION_MAJOR}.${ZIG_VERSION_MINOR}.${ZIG_VERSION_PATCH}")

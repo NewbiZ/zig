@@ -17,6 +17,7 @@ const Module = std.Build.Module;
 const InstallDir = std.Build.InstallDir;
 const GeneratedFile = std.Build.GeneratedFile;
 const Compile = @This();
+const Severity = std.zig.Zir.Inst.CompileErrors.Severity;
 
 pub const base_id: Step.Id = .compile;
 
@@ -58,6 +59,7 @@ filters: []const []const u8,
 test_runner: ?LazyPath,
 test_server_mode: bool,
 wasi_exec_model: ?std.builtin.WasiExecModel = null,
+warning_threshold: Severity = Severity.none,
 
 installed_headers: ArrayList(HeaderInstallation),
 
@@ -248,6 +250,7 @@ pub const Options = struct {
     /// Can be set regardless of target. The `.manifest` file will be ignored
     /// if the target object format does not support embedded manifests.
     win32_manifest: ?LazyPath = null,
+    warning_threshold: Severity = Severity.none,
 };
 
 pub const Kind = enum {
@@ -370,6 +373,7 @@ pub fn create(owner: *std.Build, options: Options) *Compile {
             .owner = owner,
             .makeFn = make,
             .max_rss = options.max_rss,
+            .warning_threshold = options.warning_threshold,
         }),
         .version = options.version,
         .out_filename = out_filename,
@@ -398,6 +402,7 @@ pub fn create(owner: *std.Build, options: Options) *Compile {
 
         .use_llvm = options.use_llvm,
         .use_lld = options.use_lld,
+        .warning_threshold = options.warning_threshold,
     };
 
     compile.root_module.init(owner, options.root_module, compile);
@@ -1013,6 +1018,9 @@ fn make(step: *Step, prog_node: std.Progress.Node) !void {
 
     try addFlag(&zig_args, "llvm", compile.use_llvm);
     try addFlag(&zig_args, "lld", compile.use_lld);
+
+    try zig_args.append("--warning-threshold");
+    try zig_args.append(@tagName(compile.warning_threshold));
 
     if (compile.root_module.resolved_target.?.query.ofmt) |ofmt| {
         try zig_args.append(try std.fmt.allocPrint(arena, "-ofmt={s}", .{@tagName(ofmt)}));
@@ -1879,11 +1887,11 @@ fn checkCompileErrors(compile: *Compile) !void {
     const arena = compile.step.owner.allocator;
 
     var actual_stderr_list = std.ArrayList(u8).init(arena);
-    try actual_eb.renderToWriter(.{
+    try actual_eb.renderToWriterWithWarningThreshold(.{
         .ttyconf = .no_color,
         .include_reference_trace = false,
         .include_source_line = false,
-    }, actual_stderr_list.writer());
+    }, actual_stderr_list.writer(), compile.warning_threshold);
     const actual_stderr = try actual_stderr_list.toOwnedSlice();
 
     // Render the expected lines into a string that we can compare verbatim.

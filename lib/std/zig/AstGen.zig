@@ -15,6 +15,7 @@ const isPrimitive = std.zig.primitives.isPrimitive;
 const Zir = std.zig.Zir;
 const BuiltinFn = std.zig.BuiltinFn;
 const AstRlAnnotate = std.zig.AstRlAnnotate;
+const Severity = Zir.Inst.CompileErrors.Severity;
 
 gpa: Allocator,
 tree: *const Ast,
@@ -93,6 +94,7 @@ fn setExtra(astgen: *AstGen, index: usize, extra: anytype) void {
             Zir.Inst.Ref,
             Zir.Inst.Index,
             Zir.Inst.Declaration.Name,
+            Zir.Inst.CompileErrors.Severity,
             Zir.NullTerminatedString,
             => @intFromEnum(@field(extra, field.name)),
 
@@ -336,12 +338,12 @@ const ResultInfo = struct {
             const astgen = gz.astgen;
             if (try rl.resultType(gz, node)) |ty| return ty;
             switch (rl) {
-                .destructure => |destructure| return astgen.failNodeNotes(node, "{s} must have a known result type", .{builtin_name}, &.{
-                    try astgen.errNoteNode(destructure.src_node, "destructure expressions do not provide a single result type", .{}),
-                    try astgen.errNoteNode(node, "use @as to provide explicit result type", .{}),
+                .destructure => |destructure| return astgen.failNodeNotes(Severity.fatal, node, "{s} must have a known result type", .{builtin_name}, &.{
+                    try astgen.errNoteNode(Severity.fatal, destructure.src_node, "destructure expressions do not provide a single result type", .{}),
+                    try astgen.errNoteNode(Severity.fatal, node, "use @as to provide explicit result type", .{}),
                 }),
-                else => return astgen.failNodeNotes(node, "{s} must have a known result type", .{builtin_name}, &.{
-                    try astgen.errNoteNode(node, "use @as to provide explicit result type", .{}),
+                else => return astgen.failNodeNotes(Severity.fatal, node, "{s} must have a known result type", .{builtin_name}, &.{
+                    try astgen.errNoteNode(Severity.fatal, node, "use @as to provide explicit result type", .{}),
                 }),
             }
         }
@@ -409,8 +411,8 @@ fn reachableExprComptime(
         try expr(gz, scope, ri, node);
 
     if (gz.refIsNoReturn(result_inst)) {
-        try gz.astgen.appendErrorNodeNotes(reachable_node, "unreachable code", .{}, &[_]u32{
-            try gz.astgen.errNoteNode(node, "control flow is diverted here", .{}),
+        try gz.astgen.appendErrorNodeNotes(Severity.fatal, reachable_node, "unreachable code", .{}, &[_]u32{
+            try gz.astgen.errNoteNode(Severity.fatal, node, "control flow is diverted here", .{}),
         });
     }
     return result_inst;
@@ -1198,8 +1200,8 @@ fn nosuspendExpr(
     const body_node = node_datas[node].lhs;
     assert(body_node != 0);
     if (gz.nosuspend_node != 0) {
-        try astgen.appendErrorNodeNotes(node, "redundant nosuspend block", .{}, &[_]u32{
-            try astgen.errNoteNode(gz.nosuspend_node, "other nosuspend block here", .{}),
+        try astgen.appendErrorNodeNotes(Severity.fatal, node, "redundant nosuspend block", .{}, &[_]u32{
+            try astgen.errNoteNode(Severity.fatal, gz.nosuspend_node, "other nosuspend block here", .{}),
         });
     }
     gz.nosuspend_node = node;
@@ -1219,13 +1221,13 @@ fn suspendExpr(
     const body_node = node_datas[node].lhs;
 
     if (gz.nosuspend_node != 0) {
-        return astgen.failNodeNotes(node, "suspend inside nosuspend block", .{}, &[_]u32{
-            try astgen.errNoteNode(gz.nosuspend_node, "nosuspend block here", .{}),
+        return astgen.failNodeNotes(Severity.fatal, node, "suspend inside nosuspend block", .{}, &[_]u32{
+            try astgen.errNoteNode(Severity.fatal, gz.nosuspend_node, "nosuspend block here", .{}),
         });
     }
     if (gz.suspend_node != 0) {
-        return astgen.failNodeNotes(node, "cannot suspend inside suspend block", .{}, &[_]u32{
-            try astgen.errNoteNode(gz.suspend_node, "other suspend block here", .{}),
+        return astgen.failNodeNotes(Severity.fatal, node, "cannot suspend inside suspend block", .{}, &[_]u32{
+            try astgen.errNoteNode(Severity.fatal, gz.suspend_node, "other suspend block here", .{}),
         });
     }
     assert(body_node != 0);
@@ -1258,8 +1260,8 @@ fn awaitExpr(
     const rhs_node = node_datas[node].lhs;
 
     if (gz.suspend_node != 0) {
-        return astgen.failNodeNotes(node, "cannot await inside suspend block", .{}, &[_]u32{
-            try astgen.errNoteNode(gz.suspend_node, "suspend block here", .{}),
+        return astgen.failNodeNotes(Severity.fatal, node, "cannot await inside suspend block", .{}, &[_]u32{
+            try astgen.errNoteNode(Severity.fatal, gz.suspend_node, "suspend block here", .{}),
         });
     }
     const operand = try expr(gz, scope, .{ .rl = .ref }, rhs_node);
@@ -1557,11 +1559,11 @@ fn arrayInitExpr(
         .destructure => |destructure| {
             // Untyped init - destructure directly into result pointers
             if (array_init.ast.elements.len != destructure.components.len) {
-                return astgen.failNodeNotes(node, "expected {} elements for destructure, found {}", .{
+                return astgen.failNodeNotes(Severity.fatal, node, "expected {} elements for destructure, found {}", .{
                     destructure.components.len,
                     array_init.ast.elements.len,
                 }, &.{
-                    try astgen.errNoteNode(destructure.src_node, "result destructured here", .{}),
+                    try astgen.errNoteNode(Severity.fatal, destructure.src_node, "result destructured here", .{}),
                 });
             }
             for (array_init.ast.elements, destructure.components) |elem_init, ds_comp| {
@@ -1703,8 +1705,8 @@ fn structInitExpr(
                     return rvalue(gz, ri, .empty_struct, node);
                 },
                 .destructure => |destructure| {
-                    return astgen.failNodeNotes(node, "empty initializer cannot be destructured", .{}, &.{
-                        try astgen.errNoteNode(destructure.src_node, "result destructured here", .{}),
+                    return astgen.failNodeNotes(Severity.fatal, node, "empty initializer cannot be destructured", .{}, &.{
+                        try astgen.errNoteNode(Severity.fatal, destructure.src_node, "result destructured here", .{}),
                     });
                 },
             }
@@ -1792,12 +1794,13 @@ fn structInitExpr(
                     var error_notes = std.ArrayList(u32).init(astgen.arena);
 
                     for (record.items[1..]) |duplicate| {
-                        try error_notes.append(try astgen.errNoteTok(duplicate, "duplicate name here", .{}));
+                        try error_notes.append(try astgen.errNoteTok(Severity.fatal, duplicate, "duplicate name here", .{}));
                     }
 
-                    try error_notes.append(try astgen.errNoteNode(node, "struct declared here", .{}));
+                    try error_notes.append(try astgen.errNoteNode(Severity.fatal, node, "struct declared here", .{}));
 
                     try astgen.appendErrorTokNotes(
+                        Severity.fatal,
                         record.items[0],
                         "duplicate struct field name",
                         .{},
@@ -1859,8 +1862,8 @@ fn structInitExpr(
         .destructure => |destructure| {
             // This is an untyped init, so is an actual struct, which does
             // not support destructuring.
-            return astgen.failNodeNotes(node, "struct value cannot be destructured", .{}, &.{
-                try astgen.errNoteNode(destructure.src_node, "result destructured here", .{}),
+            return astgen.failNodeNotes(Severity.fatal, node, "struct value cannot be destructured", .{}, &.{
+                try astgen.errNoteNode(Severity.fatal, destructure.src_node, "result destructured here", .{}),
             });
         },
     }
@@ -2141,8 +2144,9 @@ fn breakExpr(parent_gz: *GenZir, parent_scope: *Scope, node: Ast.Node.Index) Inn
 
                 if (block_gz.cur_defer_node != 0) {
                     // We are breaking out of a `defer` block.
-                    return astgen.failNodeNotes(node, "cannot break out of defer expression", .{}, &.{
+                    return astgen.failNodeNotes(Severity.fatal, node, "cannot break out of defer expression", .{}, &.{
                         try astgen.errNoteNode(
+                            Severity.fatal,
                             block_gz.cur_defer_node,
                             "defer expression here",
                             .{},
@@ -2237,8 +2241,9 @@ fn continueExpr(parent_gz: *GenZir, parent_scope: *Scope, node: Ast.Node.Index) 
                 const gen_zir = scope.cast(GenZir).?;
 
                 if (gen_zir.cur_defer_node != 0) {
-                    return astgen.failNodeNotes(node, "cannot continue out of defer expression", .{}, &.{
+                    return astgen.failNodeNotes(Severity.fatal, node, "cannot continue out of defer expression", .{}, &.{
                         try astgen.errNoteNode(
+                            Severity.fatal,
                             gen_zir.cur_defer_node,
                             "defer expression here",
                             .{},
@@ -2405,6 +2410,7 @@ fn checkLabelRedefinition(astgen: *AstGen, parent_scope: *Scope, label: Ast.Toke
                             label_name,
                         }, &[_]u32{
                             try astgen.errNoteTok(
+                                Severity.fatal,
                                 prev_label.token,
                                 "previous definition here",
                                 .{},
@@ -2478,7 +2484,7 @@ fn labeledBlockExpr(
     }
 
     if (!block_scope.label.?.used) {
-        try astgen.appendErrorTok(label_token, "unused block label", .{});
+        try astgen.appendErrorTok(Severity.fatal, label_token, "unused block label", .{});
     }
 
     try block_scope.setBlockBody(block_inst);
@@ -2506,11 +2512,13 @@ fn blockExprStmts(gz: *GenZir, parent_scope: *Scope, statements: []const Ast.Nod
     for (statements) |statement| {
         if (noreturn_src_node != 0) {
             try astgen.appendErrorNodeNotes(
+                Severity.fatal,
                 statement,
                 "unreachable code",
                 .{},
                 &[_]u32{
                     try astgen.errNoteNode(
+                        Severity.fatal,
                         noreturn_src_node,
                         "control flow is diverted here",
                         .{},
@@ -3016,10 +3024,10 @@ fn checkUsed(gz: *GenZir, outer_scope: *Scope, inner_scope: *Scope) InnerError!v
             .local_val => {
                 const s = scope.cast(Scope.LocalVal).?;
                 if (s.used == 0 and s.discarded == 0) {
-                    try astgen.appendErrorTok(s.token_src, "unused {s}", .{@tagName(s.id_cat)});
+                    try astgen.appendErrorTok(Severity.deadcode, s.token_src, "unused {s}", .{@tagName(s.id_cat)});
                 } else if (s.used != 0 and s.discarded != 0) {
-                    try astgen.appendErrorTokNotes(s.discarded, "pointless discard of {s}", .{@tagName(s.id_cat)}, &[_]u32{
-                        try gz.astgen.errNoteTok(s.used, "used here", .{}),
+                    try astgen.appendErrorTokNotes(Severity.cosmetic, s.discarded, "pointless discard of {s}", .{@tagName(s.id_cat)}, &[_]u32{
+                        try gz.astgen.errNoteTok(Severity.cosmetic, s.used, "used here", .{}),
                     });
                 }
                 scope = s.parent;
@@ -3027,16 +3035,16 @@ fn checkUsed(gz: *GenZir, outer_scope: *Scope, inner_scope: *Scope) InnerError!v
             .local_ptr => {
                 const s = scope.cast(Scope.LocalPtr).?;
                 if (s.used == 0 and s.discarded == 0) {
-                    try astgen.appendErrorTok(s.token_src, "unused {s}", .{@tagName(s.id_cat)});
+                    try astgen.appendErrorTok(Severity.deadcode, s.token_src, "unused {s}", .{@tagName(s.id_cat)});
                 } else {
                     if (s.used != 0 and s.discarded != 0) {
-                        try astgen.appendErrorTokNotes(s.discarded, "pointless discard of {s}", .{@tagName(s.id_cat)}, &[_]u32{
-                            try astgen.errNoteTok(s.used, "used here", .{}),
+                        try astgen.appendErrorTokNotes(Severity.cosmetic, s.discarded, "pointless discard of {s}", .{@tagName(s.id_cat)}, &[_]u32{
+                            try astgen.errNoteTok(Severity.cosmetic, s.used, "used here", .{}),
                         });
                     }
                     if (s.id_cat == .@"local variable" and !s.used_as_lvalue) {
-                        try astgen.appendErrorTokNotes(s.token_src, "local variable is never mutated", .{}, &.{
-                            try astgen.errNoteTok(s.token_src, "consider using 'const'", .{}),
+                        try astgen.appendErrorTokNotes(Severity.performance, s.token_src, "local variable is never mutated", .{}, &.{
+                            try astgen.errNoteTok(Severity.performance, s.token_src, "consider using 'const'", .{}),
                         });
                     }
                 }
@@ -3181,7 +3189,7 @@ fn varDecl(
     switch (token_tags[var_decl.ast.mut_token]) {
         .keyword_const => {
             if (var_decl.comptime_token) |comptime_token| {
-                try astgen.appendErrorTok(comptime_token, "'comptime const' is redundant; instead wrap the initialization expression with 'comptime'", .{});
+                try astgen.appendErrorTok(Severity.fatal, comptime_token, "'comptime const' is redundant; instead wrap the initialization expression with 'comptime'", .{});
             }
 
             // Depending on the type of AST the initialization expression is, we may need an lvalue
@@ -3584,7 +3592,7 @@ fn assignDestructureMaybeDecls(
     }
 
     if (full.comptime_token != null and !any_non_const_variables) {
-        try astgen.appendErrorTok(full.comptime_token.?, "'comptime const' is redundant; instead wrap the initialization expression with 'comptime'", .{});
+        try astgen.appendErrorTok(Severity.fatal, full.comptime_token.?, "'comptime const' is redundant; instead wrap the initialization expression with 'comptime'", .{});
     }
 
     // If this expression is marked comptime, we must wrap it in a comptime block.
@@ -4109,16 +4117,19 @@ fn fnDecl(
                         const identifier_str = tree.tokenSlice(main_token);
                         if (isPrimitive(identifier_str)) break :ambiguous;
                         return astgen.failNodeNotes(
+                            Severity.fatal,
                             param.type_expr,
                             "missing parameter name or type",
                             .{},
                             &[_]u32{
                                 try astgen.errNoteNode(
+                                    Severity.fatal,
                                     param.type_expr,
                                     "if this is a name, annotate its type '{s}: T'",
                                     .{identifier_str},
                                 ),
                                 try astgen.errNoteNode(
+                                    Severity.fatal,
                                     param.type_expr,
                                     "if this is a type, give it a name '<name>: {s}'",
                                     .{identifier_str},
@@ -4700,7 +4711,7 @@ fn testDecl(
                         return astgen.failTokNotes(test_name_token, "cannot test a {s}", .{
                             @tagName(local_val.id_cat),
                         }, &[_]u32{
-                            try astgen.errNoteTok(local_val.token_src, "{s} declared here", .{
+                            try astgen.errNoteTok(Severity.fatal, local_val.token_src, "{s} declared here", .{
                                 @tagName(local_val.id_cat),
                             }),
                         });
@@ -4714,7 +4725,7 @@ fn testDecl(
                         return astgen.failTokNotes(test_name_token, "cannot test a {s}", .{
                             @tagName(local_ptr.id_cat),
                         }, &[_]u32{
-                            try astgen.errNoteTok(local_ptr.token_src, "{s} declared here", .{
+                            try astgen.errNoteTok(Severity.fatal, local_ptr.token_src, "{s} declared here", .{
                                 @tagName(local_ptr.id_cat),
                             }),
                         });
@@ -4728,8 +4739,8 @@ fn testDecl(
                     if (ns.decls.get(name_str_index)) |i| {
                         if (found_already) |f| {
                             return astgen.failTokNotes(test_name_token, "ambiguous reference", .{}, &.{
-                                try astgen.errNoteNode(f, "declared here", .{}),
-                                try astgen.errNoteNode(i, "also declared here", .{}),
+                                try astgen.errNoteNode(Severity.fatal, f, "declared here", .{}),
+                                try astgen.errNoteNode(Severity.fatal, i, "also declared here", .{}),
                             });
                         }
                         // We found a match but must continue looking for ambiguous references to decls.
@@ -4965,11 +4976,12 @@ fn structDeclInner(
                     else => {},
                 } else unreachable;
                 return astgen.failNodeNotes(
+                    Severity.fatal,
                     member_node,
                     "tuple declarations cannot contain declarations",
                     .{},
                     &[_]u32{
-                        try astgen.errNoteNode(tuple_member, "tuple field here", .{}),
+                        try astgen.errNoteNode(Severity.fatal, tuple_member, "tuple field here", .{}),
                     },
                 );
             },
@@ -5114,12 +5126,13 @@ fn structDeclInner(
                 var error_notes = std.ArrayList(u32).init(astgen.arena);
 
                 for (record.items[1..]) |duplicate| {
-                    try error_notes.append(try astgen.errNoteTok(duplicate, "duplicate field here", .{}));
+                    try error_notes.append(try astgen.errNoteTok(Severity.fatal, duplicate, "duplicate field here", .{}));
                 }
 
-                try error_notes.append(try astgen.errNoteNode(node, "struct declared here", .{}));
+                try error_notes.append(try astgen.errNoteNode(Severity.fatal, node, "struct declared here", .{}));
 
                 try astgen.appendErrorTokNotes(
+                    Severity.fatal,
                     record.items[0],
                     "duplicate struct field name",
                     .{},
@@ -5299,11 +5312,13 @@ fn unionDeclInner(
         if (have_value) {
             if (arg_inst == .none) {
                 return astgen.failNodeNotes(
+                    Severity.fatal,
                     node,
                     "explicitly valued tagged union missing integer tag type",
                     .{},
                     &[_]u32{
                         try astgen.errNoteNode(
+                            Severity.fatal,
                             member.ast.value_expr,
                             "tag value specified here",
                             .{},
@@ -5313,11 +5328,13 @@ fn unionDeclInner(
             }
             if (auto_enum_tok == null) {
                 return astgen.failNodeNotes(
+                    Severity.fatal,
                     node,
                     "explicitly valued tagged union requires inferred enum tag type",
                     .{},
                     &[_]u32{
                         try astgen.errNoteNode(
+                            Severity.fatal,
                             member.ast.value_expr,
                             "tag value specified here",
                             .{},
@@ -5339,12 +5356,13 @@ fn unionDeclInner(
                 var error_notes = std.ArrayList(u32).init(astgen.arena);
 
                 for (record.items[1..]) |duplicate| {
-                    try error_notes.append(try astgen.errNoteTok(duplicate, "duplicate field here", .{}));
+                    try error_notes.append(try astgen.errNoteTok(Severity.fatal, duplicate, "duplicate field here", .{}));
                 }
 
-                try error_notes.append(try astgen.errNoteNode(node, "union declared here", .{}));
+                try error_notes.append(try astgen.errNoteNode(Severity.fatal, node, "union declared here", .{}));
 
                 try astgen.appendErrorTokNotes(
+                    Severity.fatal,
                     record.items[0],
                     "duplicate union field name",
                     .{},
@@ -5457,11 +5475,13 @@ fn containerDecl(
                     }
                     if (member.ast.type_expr != 0) {
                         return astgen.failNodeNotes(
+                            Severity.fatal,
                             member.ast.type_expr,
                             "enum fields do not have types",
                             .{},
                             &[_]u32{
                                 try astgen.errNoteNode(
+                                    Severity.fatal,
                                     node,
                                     "consider 'union(enum)' here to make it a tagged union",
                                     .{},
@@ -5477,11 +5497,13 @@ fn containerDecl(
                     if (mem.eql(u8, tree.tokenSlice(name_token), "_")) {
                         if (nonexhaustive_node != 0) {
                             return astgen.failNodeNotes(
+                                Severity.fatal,
                                 member_node,
                                 "redundant non-exhaustive enum mark",
                                 .{},
                                 &[_]u32{
                                     try astgen.errNoteNode(
+                                        Severity.fatal,
                                         nonexhaustive_node,
                                         "other mark here",
                                         .{},
@@ -5517,11 +5539,13 @@ fn containerDecl(
             };
             if (counts.nonexhaustive_node != 0 and container_decl.ast.arg == 0) {
                 try astgen.appendErrorNodeNotes(
+                    Severity.fatal,
                     node,
                     "non-exhaustive enum missing integer tag type",
                     .{},
                     &[_]u32{
                         try astgen.errNoteNode(
+                            Severity.fatal,
                             counts.nonexhaustive_node,
                             "marked non-exhaustive here",
                             .{},
@@ -5621,11 +5645,13 @@ fn containerDecl(
                 if (have_value) {
                     if (arg_inst == .none) {
                         return astgen.failNodeNotes(
+                            Severity.fatal,
                             node,
                             "explicitly valued enum missing integer tag type",
                             .{},
                             &[_]u32{
                                 try astgen.errNoteNode(
+                                    Severity.fatal,
                                     member.ast.value_expr,
                                     "tag value specified here",
                                     .{},
@@ -5647,12 +5673,13 @@ fn containerDecl(
                         var error_notes = std.ArrayList(u32).init(astgen.arena);
 
                         for (record.items[1..]) |duplicate| {
-                            try error_notes.append(try astgen.errNoteTok(duplicate, "duplicate field here", .{}));
+                            try error_notes.append(try astgen.errNoteTok(Severity.fatal, duplicate, "duplicate field here", .{}));
                         }
 
-                        try error_notes.append(try astgen.errNoteNode(node, "enum declared here", .{}));
+                        try error_notes.append(try astgen.errNoteNode(Severity.fatal, node, "enum declared here", .{}));
 
                         try astgen.appendErrorTokNotes(
+                            Severity.fatal,
                             record.items[0],
                             "duplicate enum field name",
                             .{},
@@ -5852,6 +5879,7 @@ fn errorSetDecl(gz: *GenZir, ri: ResultInfo, node: Ast.Node.Index) InnerError!Zi
                             .{name},
                             &[_]u32{
                                 try astgen.errNoteTok(
+                                    Severity.fatal,
                                     gop.value_ptr.*,
                                     "previous declaration here",
                                     .{},
@@ -5894,8 +5922,9 @@ fn tryExpr(
     };
 
     if (parent_gz.any_defer_node != 0) {
-        return astgen.failNodeNotes(node, "'try' not allowed inside defer expression", .{}, &.{
+        return astgen.failNodeNotes(Severity.fatal, node, "'try' not allowed inside defer expression", .{}, &.{
             try astgen.errNoteNode(
+                Severity.fatal,
                 parent_gz.any_defer_node,
                 "defer expression here",
                 .{},
@@ -6700,7 +6729,7 @@ fn whileExpr(
 
     if (loop_scope.label) |some| {
         if (!some.used) {
-            try astgen.appendErrorTok(some.token, "unused while loop label", .{});
+            try astgen.appendErrorTok(Severity.fatal, some.token, "unused while loop label", .{});
         }
     }
 
@@ -6985,7 +7014,7 @@ fn forExpr(
 
     if (loop_scope.label) |some| {
         if (!some.used) {
-            try astgen.appendErrorTok(some.token, "unused for loop label", .{});
+            try astgen.appendErrorTok(Severity.fatal, some.token, "unused for loop label", .{});
         }
     }
 
@@ -7098,6 +7127,7 @@ fn switchExprErrUnion(
                     .{},
                     &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             src,
                             "previous else prong here",
                             .{},
@@ -7120,6 +7150,7 @@ fn switchExprErrUnion(
                 .{},
                 &[_]u32{
                     try astgen.errNoteTok(
+                        Severity.fatal,
                         case_src,
                         "consider using 'else'",
                         .{},
@@ -7631,6 +7662,7 @@ fn switchExpr(
                     .{},
                     &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             src,
                             "previous else prong here",
                             .{},
@@ -7639,16 +7671,19 @@ fn switchExpr(
                 );
             } else if (underscore_src) |some_underscore| {
                 return astgen.failNodeNotes(
+                    Severity.fatal,
                     switch_node,
                     "else and '_' prong in switch expression",
                     .{},
                     &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             case_src,
                             "else prong here",
                             .{},
                         ),
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             some_underscore,
                             "'_' prong here",
                             .{},
@@ -7672,6 +7707,7 @@ fn switchExpr(
                     .{},
                     &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             src,
                             "previous '_' prong here",
                             .{},
@@ -7680,16 +7716,19 @@ fn switchExpr(
                 );
             } else if (else_src) |some_else| {
                 return astgen.failNodeNotes(
+                    Severity.fatal,
                     switch_node,
                     "else and '_' prong in switch expression",
                     .{},
                     &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             some_else,
                             "else prong here",
                             .{},
                         ),
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             case_src,
                             "'_' prong here",
                             .{},
@@ -8024,8 +8063,9 @@ fn ret(gz: *GenZir, scope: *Scope, node: Ast.Node.Index) InnerError!Zir.Inst.Ref
     }
 
     if (gz.any_defer_node != 0) {
-        return astgen.failNodeNotes(node, "cannot return from defer expression", .{}, &.{
+        return astgen.failNodeNotes(Severity.fatal, node, "cannot return from defer expression", .{}, &.{
             try astgen.errNoteNode(
+                Severity.fatal,
                 gz.any_defer_node,
                 "defer expression here",
                 .{},
@@ -8293,9 +8333,9 @@ fn localVarRef(
                 // Can't close over a runtime variable
                 if (num_namespaces_out != 0 and !local_ptr.maybe_comptime and !gz.is_typeof) {
                     const ident_name = try astgen.identifierTokenString(ident_token);
-                    return astgen.failNodeNotes(ident, "mutable '{s}' not accessible from here", .{ident_name}, &.{
-                        try astgen.errNoteTok(local_ptr.token_src, "declared mutable here", .{}),
-                        try astgen.errNoteNode(capturing_namespace.node, "crosses namespace boundary here", .{}),
+                    return astgen.failNodeNotes(Severity.fatal, ident, "mutable '{s}' not accessible from here", .{ident_name}, &.{
+                        try astgen.errNoteTok(Severity.fatal, local_ptr.token_src, "declared mutable here", .{}),
+                        try astgen.errNoteNode(Severity.fatal, capturing_namespace.node, "crosses namespace boundary here", .{}),
                     });
                 }
 
@@ -8331,9 +8371,9 @@ fn localVarRef(
             const ns = s.cast(Scope.Namespace).?;
             if (ns.decls.get(name_str_index)) |i| {
                 if (found_already) |f| {
-                    return astgen.failNodeNotes(ident, "ambiguous reference", .{}, &.{
-                        try astgen.errNoteNode(f, "declared here", .{}),
-                        try astgen.errNoteNode(i, "also declared here", .{}),
+                    return astgen.failNodeNotes(Severity.fatal, ident, "ambiguous reference", .{}, &.{
+                        try astgen.errNoteNode(Severity.fatal, f, "declared here", .{}),
+                        try astgen.errNoteNode(Severity.fatal, i, "also declared here", .{}),
                     });
                 }
                 // We found a match but must continue looking for ambiguous references to decls.
@@ -8450,24 +8490,24 @@ fn tunnelThroughClosure(
     var cur_capture_index = std.math.cast(
         u16,
         (try root_ns.captures.getOrPut(gpa, root_capture)).index,
-    ) orelse return astgen.failNodeNotes(root_ns.node, "this compiler implementation only supports up to 65536 captures per namespace", .{}, &.{
+    ) orelse return astgen.failNodeNotes(Severity.fatal, root_ns.node, "this compiler implementation only supports up to 65536 captures per namespace", .{}, &.{
         switch (decl_src) {
-            .token => |t| try astgen.errNoteTok(t, "captured value here", .{}),
-            .node => |n| try astgen.errNoteNode(n, "captured value here", .{}),
+            .token => |t| try astgen.errNoteTok(Severity.fatal, t, "captured value here", .{}),
+            .node => |n| try astgen.errNoteNode(Severity.fatal, n, "captured value here", .{}),
         },
-        try astgen.errNoteNode(inner_ref_node, "value used here", .{}),
+        try astgen.errNoteNode(Severity.fatal, inner_ref_node, "value used here", .{}),
     });
 
     for (intermediate_tunnels) |tunnel_ns| {
         cur_capture_index = std.math.cast(
             u16,
             (try tunnel_ns.captures.getOrPut(gpa, Zir.Inst.Capture.wrap(.{ .nested = cur_capture_index }))).index,
-        ) orelse return astgen.failNodeNotes(tunnel_ns.node, "this compiler implementation only supports up to 65536 captures per namespace", .{}, &.{
+        ) orelse return astgen.failNodeNotes(Severity.fatal, tunnel_ns.node, "this compiler implementation only supports up to 65536 captures per namespace", .{}, &.{
             switch (decl_src) {
-                .token => |t| try astgen.errNoteTok(t, "captured value here", .{}),
-                .node => |n| try astgen.errNoteNode(n, "captured value here", .{}),
+                .token => |t| try astgen.errNoteTok(Severity.fatal, t, "captured value here", .{}),
+                .node => |n| try astgen.errNoteNode(Severity.fatal, n, "captured value here", .{}),
             },
-            try astgen.errNoteNode(inner_ref_node, "value used here", .{}),
+            try astgen.errNoteNode(Severity.fatal, inner_ref_node, "value used here", .{}),
         });
     }
 
@@ -8544,8 +8584,8 @@ fn numberLiteral(gz: *GenZir, ri: ResultInfo, node: Ast.Node.Index, source_node:
                 "integer literal '-0' is ambiguous",
                 .{},
                 &.{
-                    try astgen.errNoteTok(num_token, "use '0' for an integer zero", .{}),
-                    try astgen.errNoteTok(num_token, "use '-0.0' for a floating-point signed zero", .{}),
+                    try astgen.errNoteTok(Severity.fatal, num_token, "use '0' for an integer zero", .{}),
+                    try astgen.errNoteTok(Severity.fatal, num_token, "use '-0.0' for a floating-point signed zero", .{}),
                 },
             ),
             1 => {
@@ -8618,7 +8658,7 @@ fn failWithNumberError(astgen: *AstGen, err: std.zig.number_literal.Error, token
             return astgen.failTok(token, "number '{s}' has leading zero", .{bytes});
         } else {
             return astgen.failTokNotes(token, "number '{s}' has leading zero", .{bytes}, &.{
-                try astgen.errNoteTok(token, "use '0o' prefix for octal literals", .{}),
+                try astgen.errNoteTok(Severity.fatal, token, "use '0o' prefix for octal literals", .{}),
             });
         },
         .digit_after_base => return astgen.failTok(token, "expected a digit after base prefix", .{}),
@@ -9216,9 +9256,9 @@ fn builtinCall(
                             const ns = s.cast(Scope.Namespace).?;
                             if (ns.decls.get(decl_name)) |i| {
                                 if (found_already) |f| {
-                                    return astgen.failNodeNotes(node, "ambiguous reference", .{}, &.{
-                                        try astgen.errNoteNode(f, "declared here", .{}),
-                                        try astgen.errNoteNode(i, "also declared here", .{}),
+                                    return astgen.failNodeNotes(Severity.fatal, node, "ambiguous reference", .{}, &.{
+                                        try astgen.errNoteNode(Severity.fatal, f, "declared here", .{}),
+                                        try astgen.errNoteNode(Severity.fatal, i, "also declared here", .{}),
                                     });
                                 }
                                 // We found a match but must continue looking for ambiguous references to decls.
@@ -11353,7 +11393,7 @@ fn failNode(
     comptime format: []const u8,
     args: anytype,
 ) InnerError {
-    return astgen.failNodeNotes(node, format, args, &[0]u32{});
+    return astgen.failNodeNotes(Severity.fatal, node, format, args, &[0]u32{});
 }
 
 fn appendErrorNode(
@@ -11362,11 +11402,12 @@ fn appendErrorNode(
     comptime format: []const u8,
     args: anytype,
 ) Allocator.Error!void {
-    try astgen.appendErrorNodeNotes(node, format, args, &[0]u32{});
+    try astgen.appendErrorNodeNotes(Severity.fatal, node, format, args, &[0]u32{});
 }
 
 fn appendErrorNodeNotes(
     astgen: *AstGen,
+    severity: Severity,
     node: Ast.Node.Index,
     comptime format: []const u8,
     args: anytype,
@@ -11384,6 +11425,7 @@ fn appendErrorNodeNotes(
         break :blk @intCast(notes_start);
     } else 0;
     try astgen.compile_errors.append(astgen.gpa, .{
+        .severity = severity,
         .msg = msg,
         .node = node,
         .token = 0,
@@ -11394,12 +11436,13 @@ fn appendErrorNodeNotes(
 
 fn failNodeNotes(
     astgen: *AstGen,
+    severity: Severity,
     node: Ast.Node.Index,
     comptime format: []const u8,
     args: anytype,
     notes: []const u32,
 ) InnerError {
-    try appendErrorNodeNotes(astgen, node, format, args, notes);
+    try astgen.appendErrorNodeNotes(severity, node, format, args, notes);
     return error.AnalysisFail;
 }
 
@@ -11414,11 +11457,12 @@ fn failTok(
 
 fn appendErrorTok(
     astgen: *AstGen,
+    severity: Severity,
     token: Ast.TokenIndex,
     comptime format: []const u8,
     args: anytype,
 ) !void {
-    try astgen.appendErrorTokNotesOff(token, 0, format, args, &[0]u32{});
+    try astgen.appendErrorTokNotesOff(severity, token, 0, format, args, &[0]u32{});
 }
 
 fn failTokNotes(
@@ -11428,18 +11472,19 @@ fn failTokNotes(
     args: anytype,
     notes: []const u32,
 ) InnerError {
-    try appendErrorTokNotesOff(astgen, token, 0, format, args, notes);
+    try astgen.appendErrorTokNotesOff(Severity.fatal, token, 0, format, args, notes);
     return error.AnalysisFail;
 }
 
 fn appendErrorTokNotes(
     astgen: *AstGen,
+    severity: Severity,
     token: Ast.TokenIndex,
     comptime format: []const u8,
     args: anytype,
     notes: []const u32,
 ) !void {
-    return appendErrorTokNotesOff(astgen, token, 0, format, args, notes);
+    return astgen.appendErrorTokNotesOff(severity, token, 0, format, args, notes);
 }
 
 /// Same as `fail`, except given a token plus an offset from its starting byte
@@ -11451,12 +11496,13 @@ fn failOff(
     comptime format: []const u8,
     args: anytype,
 ) InnerError {
-    try appendErrorTokNotesOff(astgen, token, byte_offset, format, args, &.{});
+    try astgen.appendErrorTokNotesOff(Severity.fatal, token, byte_offset, format, args, &.{});
     return error.AnalysisFail;
 }
 
 fn appendErrorTokNotesOff(
     astgen: *AstGen,
+    severity: Severity,
     token: Ast.TokenIndex,
     byte_offset: u32,
     comptime format: []const u8,
@@ -11476,6 +11522,7 @@ fn appendErrorTokNotesOff(
         break :blk @intCast(notes_start);
     } else 0;
     try astgen.compile_errors.append(gpa, .{
+        .severity = severity,
         .msg = msg,
         .node = 0,
         .token = token,
@@ -11486,15 +11533,17 @@ fn appendErrorTokNotesOff(
 
 fn errNoteTok(
     astgen: *AstGen,
+    severity: Severity,
     token: Ast.TokenIndex,
     comptime format: []const u8,
     args: anytype,
 ) Allocator.Error!u32 {
-    return errNoteTokOff(astgen, token, 0, format, args);
+    return astgen.errNoteTokOff(severity, token, 0, format, args);
 }
 
 fn errNoteTokOff(
     astgen: *AstGen,
+    severity: Severity,
     token: Ast.TokenIndex,
     byte_offset: u32,
     comptime format: []const u8,
@@ -11505,6 +11554,7 @@ fn errNoteTokOff(
     const msg: Zir.NullTerminatedString = @enumFromInt(string_bytes.items.len);
     try string_bytes.writer(astgen.gpa).print(format ++ "\x00", args);
     return astgen.addExtra(Zir.Inst.CompileErrors.Item{
+        .severity = severity,
         .msg = msg,
         .node = 0,
         .token = token,
@@ -11515,6 +11565,7 @@ fn errNoteTokOff(
 
 fn errNoteNode(
     astgen: *AstGen,
+    severity: Severity,
     node: Ast.Node.Index,
     comptime format: []const u8,
     args: anytype,
@@ -11524,6 +11575,7 @@ fn errNoteNode(
     const msg: Zir.NullTerminatedString = @enumFromInt(string_bytes.items.len);
     try string_bytes.writer(astgen.gpa).print(format ++ "\x00", args);
     return astgen.addExtra(Zir.Inst.CompileErrors.Item{
+        .severity = severity,
         .msg = msg,
         .node = node,
         .token = 0,
@@ -13377,7 +13429,7 @@ fn detectLocalShadowing(
         return astgen.failTokNotes(name_token, "name shadows primitive '{s}'", .{
             token_bytes,
         }, &[_]u32{
-            try astgen.errNoteTok(name_token, "consider using @\"{s}\" to disambiguate", .{
+            try astgen.errNoteTok(Severity.fatal, name_token, "consider using @\"{s}\" to disambiguate", .{
                 token_bytes,
             }),
         });
@@ -13397,6 +13449,7 @@ fn detectLocalShadowing(
                         @tagName(id_cat), name, @tagName(local_val.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             local_val.token_src,
                             "previous declaration here",
                             .{},
@@ -13407,6 +13460,7 @@ fn detectLocalShadowing(
                     @tagName(local_val.id_cat), name,
                 }, &[_]u32{
                     try astgen.errNoteTok(
+                        Severity.fatal,
                         local_val.token_src,
                         "previous declaration here",
                         .{},
@@ -13426,6 +13480,7 @@ fn detectLocalShadowing(
                         @tagName(id_cat), name, @tagName(local_ptr.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             local_ptr.token_src,
                             "previous declaration here",
                             .{},
@@ -13436,6 +13491,7 @@ fn detectLocalShadowing(
                     @tagName(local_ptr.id_cat), name,
                 }, &[_]u32{
                     try astgen.errNoteTok(
+                        Severity.fatal,
                         local_ptr.token_src,
                         "previous declaration here",
                         .{},
@@ -13457,7 +13513,7 @@ fn detectLocalShadowing(
             return astgen.failTokNotes(name_token, "{s} shadows declaration of '{s}'", .{
                 @tagName(id_cat), name,
             }, &[_]u32{
-                try astgen.errNoteNode(decl_node, "declared here", .{}),
+                try astgen.errNoteNode(Severity.fatal, decl_node, "declared here", .{}),
             });
         },
         .gen_zir => {
@@ -13576,8 +13632,8 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
                             const name_slice = astgen.string_bytes.items[@intFromEnum(name.index)..][0..name.len];
                             const name_duped = try gpa.dupe(u8, name_slice);
                             defer gpa.free(name_duped);
-                            try astgen.appendErrorNodeNotes(member_node, "duplicate test name '{s}'", .{name_duped}, &.{
-                                try astgen.errNoteNode(gop.value_ptr.*, "other test here", .{}),
+                            try astgen.appendErrorNodeNotes(Severity.fatal, member_node, "duplicate test name '{s}'", .{name_duped}, &.{
+                                try astgen.errNoteNode(Severity.fatal, gop.value_ptr.*, "other test here", .{}),
                             });
                         } else {
                             gop.value_ptr.* = member_node;
@@ -13590,8 +13646,8 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
                             const name_slice = mem.span(astgen.nullTerminatedString(name));
                             const name_duped = try gpa.dupe(u8, name_slice);
                             defer gpa.free(name_duped);
-                            try astgen.appendErrorNodeNotes(member_node, "duplicate decltest '{s}'", .{name_duped}, &.{
-                                try astgen.errNoteNode(gop.value_ptr.*, "other decltest here", .{}),
+                            try astgen.appendErrorNodeNotes(Severity.fatal, member_node, "duplicate decltest '{s}'", .{name_duped}, &.{
+                                try astgen.errNoteNode(Severity.fatal, gop.value_ptr.*, "other decltest here", .{}),
                             });
                         } else {
                             gop.value_ptr.* = member_node;
@@ -13609,7 +13665,7 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
             switch (astgen.failTokNotes(name_token, "name shadows primitive '{s}'", .{
                 token_bytes,
             }, &[_]u32{
-                try astgen.errNoteTok(name_token, "consider using @\"{s}\" to disambiguate", .{
+                try astgen.errNoteTok(Severity.fatal, name_token, "consider using @\"{s}\" to disambiguate", .{
                     token_bytes,
                 }),
             })) {
@@ -13623,10 +13679,10 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
         if (gop.found_existing) {
             const name = try gpa.dupe(u8, mem.span(astgen.nullTerminatedString(name_str_index)));
             defer gpa.free(name);
-            switch (astgen.failNodeNotes(member_node, "redeclaration of '{s}'", .{
+            switch (astgen.failNodeNotes(Severity.fatal, member_node, "redeclaration of '{s}'", .{
                 name,
             }, &[_]u32{
-                try astgen.errNoteNode(gop.value_ptr.*, "other declaration here", .{}),
+                try astgen.errNoteNode(Severity.fatal, gop.value_ptr.*, "other declaration here", .{}),
             })) {
                 error.AnalysisFail => continue,
                 error.OutOfMemory => return error.OutOfMemory,
@@ -13642,6 +13698,7 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
                         token_bytes, @tagName(local_val.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             local_val.token_src,
                             "previous declaration here",
                             .{},
@@ -13657,6 +13714,7 @@ fn scanDecls(astgen: *AstGen, namespace: *Scope.Namespace, members: []const Ast.
                         token_bytes, @tagName(local_ptr.id_cat),
                     }, &[_]u32{
                         try astgen.errNoteTok(
+                            Severity.fatal,
                             local_ptr.token_src,
                             "previous declaration here",
                             .{},
@@ -13804,7 +13862,7 @@ fn lowerAstErrors(astgen: *AstGen) !void {
         const tok = parse_err.token + @intFromBool(parse_err.token_is_prev);
         const bad_off: u32 = @intCast(tree.tokenSlice(parse_err.token + @intFromBool(parse_err.token_is_prev)).len);
         const byte_abs = token_starts[parse_err.token + @intFromBool(parse_err.token_is_prev)] + bad_off;
-        try notes.append(gpa, try astgen.errNoteTokOff(tok, bad_off, "invalid byte: '{'}'", .{
+        try notes.append(gpa, try astgen.errNoteTokOff(Severity.fatal, tok, bad_off, "invalid byte: '{'}'", .{
             std.zig.fmtEscapes(tree.source[byte_abs..][0..1]),
         }));
     }
@@ -13814,13 +13872,13 @@ fn lowerAstErrors(astgen: *AstGen) !void {
 
         msg.clearRetainingCapacity();
         try tree.renderError(note, msg.writer(gpa));
-        try notes.append(gpa, try astgen.errNoteTok(note.token, "{s}", .{msg.items}));
+        try notes.append(gpa, try astgen.errNoteTok(Severity.fatal, note.token, "{s}", .{msg.items}));
     }
 
     const extra_offset = tree.errorOffset(parse_err);
     msg.clearRetainingCapacity();
     try tree.renderError(parse_err, msg.writer(gpa));
-    try astgen.appendErrorTokNotesOff(parse_err.token, extra_offset, "{s}", .{msg.items}, notes.items);
+    try astgen.appendErrorTokNotesOff(Severity.fatal, parse_err.token, extra_offset, "{s}", .{msg.items}, notes.items);
 }
 
 const DeclarationName = union(enum) {

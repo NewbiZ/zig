@@ -36,6 +36,7 @@ const Cache = std.Build.Cache;
 const c_codegen = @import("codegen/c.zig");
 const libtsan = @import("libtsan.zig");
 const Zir = std.zig.Zir;
+const Severity = std.zig.Zir.Inst.CompileErrors.Severity;
 const Builtin = @import("Builtin.zig");
 const LlvmObject = @import("codegen/llvm.zig").Object;
 
@@ -226,6 +227,8 @@ work_queue_wait_group: WaitGroup = .{},
 astgen_wait_group: WaitGroup = .{},
 
 llvm_opt_bisect_limit: c_int,
+
+warning_threshold: Severity,
 
 pub const Emit = struct {
     /// Where the output will go.
@@ -1127,6 +1130,7 @@ pub const CreateOptions = struct {
     pdb_out_path: ?[]const u8 = null,
     error_limit: ?Compilation.Module.ErrorInt = null,
     global_cc_argv: []const []const u8 = &.{},
+    warning_threshold: Severity = Severity.none,
 
     pub const Entry = link.File.OpenOptions.Entry;
 };
@@ -1472,6 +1476,7 @@ pub fn create(gpa: Allocator, arena: Allocator, options: CreateOptions) !*Compil
             .force_undefined_symbols = options.force_undefined_symbols,
             .link_eh_frame_hdr = link_eh_frame_hdr,
             .global_cc_argv = options.global_cc_argv,
+            .warning_threshold = options.warning_threshold,
         };
 
         // Prevent some footguns by making the "any" fields of config reflect
@@ -3954,7 +3959,7 @@ fn workerAstGenFile(
     defer child_prog_node.end();
 
     const mod = comp.module.?;
-    mod.astGenFile(file) catch |err| switch (err) {
+    mod.astGenFile(file, comp.warning_threshold) catch |err| switch (err) {
         error.AnalysisFail => return,
         else => {
             file.status = .retryable_failure;
